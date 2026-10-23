@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evaluación ciega de análisis narrativos</title>
+<style>
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#20242b;background:#f4f6f8}
+*{box-sizing:border-box}body{margin:0}.wrap{max-width:1100px;margin:auto;padding:24px}
+header,.panel{background:white;border:1px solid #dce1e7;border-radius:16px;padding:22px;margin-bottom:18px}
+h1{font-size:1.6rem;margin:0 0 8px}h2{font-size:1.15rem;margin:0 0 12px}
+.muted{color:#606975}.progress{height:8px;background:#e6eaf0;border-radius:99px;overflow:hidden;margin:16px 0}
+#bar{height:100%;width:0;background:#3d6ea8;transition:width .2s}
+.topline{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.piece-meta{font-size:.9rem;color:#606975;margin-bottom:10px}
+.piece-text{white-space:pre-wrap;line-height:1.65;overflow-wrap:anywhere}
+.analyses{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.analysis{background:#fff;border:1px solid #dce1e7;border-radius:14px;padding:18px;min-width:0}
+.analysis h2{display:flex;justify-content:space-between;align-items:center}
+.tag{font-size:.8rem;background:#eef2f7;padding:4px 9px;border-radius:99px}
+.vote-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+button{font:inherit;border:1px solid #cbd2dc;background:#fff;border-radius:10px;padding:10px 14px;cursor:pointer}
+button:hover{background:#edf3fa}button.primary{background:#244f7d;color:white;border-color:#244f7d}
+button:disabled{opacity:.4;cursor:not-allowed}
+.vote.selected{background:#dceafe;border-color:#3268a5;box-shadow:inset 0 0 0 1px #3268a5}
+textarea{font:inherit;width:100%;min-height:88px;padding:12px;border:1px solid #cbd2dc;border-radius:10px;resize:vertical}
+.controls{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:16px}
+.notice{background:#fff8e7;border:1px solid #f0d99b;padding:12px 14px;border-radius:10px;margin-top:12px}
+#status{margin-top:10px;color:#32613d}
+@media(max-width:760px){.analyses{grid-template-columns:1fr}.wrap{padding:12px}header,.panel{padding:16px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="topline"><div><h1>Evaluación ciega de análisis narrativos</h1><div class="muted">Compara la calidad de dos análisis sin conocer el modelo que los generó.</div></div><strong id="counter">Pieza 1 de 20</strong></div>
+  <div class="progress"><div id="bar"></div></div>
+  <div class="muted">Las respuestas se guardan en este navegador mientras mantengas esta página abierta. Al finalizar, descarga el JSON de valoraciones.</div>
+  <div class="notice">Versión de plantilla: carga un archivo <code>crudos.json</code> generado por el script de comparación. No muestra nombres de modelos, costes, tiempos ni tokens.</div>
+</header>
+<section class="panel">
+  <h2 id="piece-title">Pieza</h2>
+  <div id="piece-meta" class="piece-meta"></div>
+  <div id="piece-text" class="piece-text">Carga el archivo crudos.json para empezar.</div>
+</section>
+<div class="analyses">
+  <section class="analysis"><h2>Análisis <span class="tag">A</span></h2><div id="analysis-a" class="piece-text">—</div></section>
+  <section class="analysis"><h2>Análisis <span class="tag">B</span></h2><div id="analysis-b" class="piece-text">—</div></section>
+</div>
+<section class="panel">
+  <h2>¿Cuál análisis prefieres para esta pieza?</h2>
+  <div class="vote-row">
+    <button class="vote" data-vote="A">Prefiero A</button>
+    <button class="vote" data-vote="B">Prefiero B</button>
+    <button class="vote" data-vote="empate">Empate</button>
+    <button id="clear-vote">Borrar elección</button>
+  </div>
+  <h2 style="margin-top:22px">Comentarios (opcional)</h2>
+  <textarea id="comment" placeholder="Por ejemplo: más fiel al texto, mejor explicado, menos especulativo…"></textarea>
+  <div class="controls">
+    <div><button id="prev">← Anterior</button> <button id="next" class="primary">Siguiente →</button></div>
+    <div><button id="download" class="primary">Descargar valoraciones JSON</button> <button id="download-key">Descargar clave privada</button></div>
+  </div>
+  <div id="status" role="status"></div>
+</section>
+<section class="panel">
+  <h2>Cargar datos</h2>
+  <p class="muted">Selecciona el <code>crudos.json</code> generado por <code>comparar.py</code>. El archivo se procesa localmente en este navegador.</p>
+  <input type="file" id="file" accept=".json,application/json">
+  <p class="muted">El JSON de entrada contiene las salidas de ambos modelos. Esta interfaz las etiqueta aleatoriamente por pieza y no presenta las medidas técnicas.</p>
+</section>
+</div>
+<script>
+"use strict";
+let rows=[], index=0, votes={}, orderings=[];
+const $=id=>document.getElementById(id);
+function shufflePair(){return Math.random()<0.5?["sonnet","haiku"]:["haiku","sonnet"];}
+function normalizeResult(value){
+  if(value==null) return "(No se obtuvo análisis para esta ejecución.)";
+  if(typeof value==="string") return value;
+  if(typeof value==="object") return JSON.stringify(value,null,2);
+  return String(value);
+}
+function modelKeys(obj){
+  const keys=Object.keys(obj||{});
+  const s=keys.find(k=>k.includes("sonnet"));
+  const h=keys.find(k=>k.includes("haiku"));
+  return {sonnet:s,haiku:h};
+}
+function loadData(data){
+  if(!data || !Array.isArray(data.filas)) throw new Error("El JSON no contiene el array esperado «filas».");
+  const normalized=data.filas.map((f,i)=>{
+    const keys=modelKeys(f.salidas);
+    if(!keys.sonnet || !keys.haiku) throw new Error("No encuentro ambas salidas Sonnet/Haiku en la pieza "+(i+1)+".");
+    const p=f.pieza||{};
+    return {id:p.id??p.piece_id??String(i+1),title:p.title||("Pieza "+(i+1)),source:p.source||"",date:p.date||"",text:p.text||"",outputs:{sonnet:f.salidas[keys.sonnet],haiku:f.salidas[keys.haiku]}};
+  });
+  rows=normalized; index=0; votes={}; orderings=rows.map(()=>shufflePair()); render();
+  $("status").textContent="Cargadas "+rows.length+" piezas. Las etiquetas A/B se han asignado aleatoriamente por pieza.";
+}
+function render(){
+  if(!rows.length)return;
+  const r=rows[index], order=orderings[index];
+  $("counter").textContent=`Pieza ${index+1} de ${rows.length}`;
+  $("bar").style.width=`${((index+1)/rows.length)*100}%`;
+  $("piece-title").textContent=r.title||`Pieza ${index+1}`;
+  $("piece-meta").textContent=[r.source,r.date].filter(Boolean).join(" · ");
+  $("piece-text").textContent=r.text||"(La pieza no contiene campo text.)";
+  $("analysis-a").textContent=normalizeResult(r.outputs[order[0]]);
+  $("analysis-b").textContent=normalizeResult(r.outputs[order[1]]);
+  const v=votes[r.id]||{};
+  document.querySelectorAll("[data-vote]").forEach(b=>b.classList.toggle("selected",v.choice===b.dataset.vote));
+  $("comment").value=v.comment||"";
+  $("prev").disabled=index===0;$("next").textContent=index===rows.length-1?"Última pieza ✓":"Siguiente →";
+}
+document.querySelectorAll("[data-vote]").forEach(b=>b.addEventListener("click",()=>{
+  if(!rows.length)return; const id=rows[index].id; votes[id]={...(votes[id]||{}),choice:b.dataset.vote}; render();
+}));
+$("clear-vote").addEventListener("click",()=>{if(rows.length){delete votes[rows[index].id];render();}});
+$("comment").addEventListener("input",()=>{if(!rows.length)return;const id=rows[index].id;votes[id]={...(votes[id]||{}),comment:$("comment").value};});
+$("prev").addEventListener("click",()=>{if(index>0){index--;render();}});
+$("next").addEventListener("click",()=>{if(index<rows.length-1){index++;render();}else{$("status").textContent="Has llegado a la última pieza. Descarga las valoraciones cuando termines."; }});
+$("file").addEventListener("change",async e=>{
+  const file=e.target.files[0];if(!file)return;
+  try{loadData(JSON.parse(await file.text()));}catch(err){$("status").textContent="No se pudo cargar: "+err.message;}
+});
+$("download").addEventListener("click",()=>{
+  if(!rows.length){$("status").textContent="Primero carga crudos.json.";return;}
+  const payload={schema_version:1,created_at:new Date().toISOString(),total_piezas:rows.length,valoraciones:rows.map((r,i)=>({pieza_id:r.id,numero:i+1,titulo:r.title,eleccion:(votes[r.id]||{}).choice||null,comentario:(votes[r.id]||{}).comment||""}))};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="valoraciones_ciegas.json";a.click();URL.revokeObjectURL(url);
+  $("status").textContent="Archivo de valoraciones descargado. Guárdalo de forma privada.";
+});
+
+$("download-key").addEventListener("click",()=>{
+  if(!rows.length){$("status").textContent="Primero carga crudos.json.";return;}
+  const payload={schema_version:1,created_at:new Date().toISOString(),uso:"CONFIDENCIAL: no compartir con la persona evaluadora hasta cerrar la evaluación",correspondencias:rows.map((r,i)=>({pieza_id:r.id,numero:i+1,etiqueta_A_corresponde_a:orderings[i][0],etiqueta_B_corresponde_a:orderings[i][1]}))};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="clave_privada_modelos.json";a.click();URL.revokeObjectURL(url);
+  $("status").textContent="Clave privada descargada. No la compartas con la persona evaluadora hasta cerrar la prueba.";
+});
+</script>
+</body>
+</html>
